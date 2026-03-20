@@ -1,0 +1,9 @@
+requests
+python-dotenv
+google-search-results
+openai
+yfinance
+pandas
+matplotlib
+scipy
+numpy
