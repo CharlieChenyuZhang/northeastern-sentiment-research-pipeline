@@ -22,7 +22,7 @@ SYSTEM_PROMPT = (
 )
 
 # Input and output files
-INPUT_CSV = "enriched_prompts.csv"
+INPUT_CSV = "prompts.csv"
 OUTPUT_CSV = "filtered_enriched_prompts.csv"
 INFERIOR_CSV = "inferior_list.csv"
 

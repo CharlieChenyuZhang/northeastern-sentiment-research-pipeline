@@ -146,22 +146,30 @@ def discover_urls(query: str, limit: int) -> List[str]:
 # 2) Scrape each URL & extract prompts via LLM
 # ---------------------------------------------------------------------------
 
-def scrape_prompts(url: str) -> List[str]:
+def scrape_prompts_and_metadata(url: str) -> dict:
     payload = {
         "url": url,
         "formats": ["json"],
         "jsonOptions": {
             "prompt": (
-                "Extract every mindfulness or journaling prompt from the page. "
-                "Return them as an array called 'prompts'. Do **not** invent prompts."
+                "Extract two things from this page:\n"
+                "1. Every mindfulness or journaling prompt. Return them as an array called 'prompts'. Do **not** invent prompts.\n"
+                "2. The published time, modified time, and author of the page. "
+                "Return them as 'publishedTime', 'modifiedTime', and 'author'. "
+                "If any are missing, return 'n/a' for that field."
             )
         },
     }
     resp = requests.post(f"{BASE}/scrape", headers=HEADERS, json=payload, timeout=120)
     resp.raise_for_status()
-    page = resp.json().get("data", {})
-    prompts = page.get("json", {}).get("prompts", [])
-    return [p.strip() for p in prompts if isinstance(p, str) and p.strip()]
+    json_data = resp.json().get("data", {}).get("json", {})
+    prompts = json_data.get("prompts", [])
+    return {
+        "prompts": [p.strip() for p in prompts if isinstance(p, str) and p.strip()],
+        "published_time": json_data.get("publishedTime") or "n/a",
+        "modified_time": json_data.get("modifiedTime") or "n/a",
+        "author": json_data.get("author") or "n/a",
+    }
 
 # ---------------------------------------------------------------------------
 # 3) Orchestrate & output
@@ -207,10 +215,11 @@ def main() -> None:
             sys.stderr.write(f"[WARN] Could not write URLs to {urls_file}: {e}\n")
 
         new_rows = []
+        fieldnames = ["prompt", "source url", "query", "published_time", "modified_time", "author"]
         # Parallelize URL processing
         with ThreadPoolExecutor(max_workers=8) as executor:  # 8 threads
             future_to_url = {
-                executor.submit(scrape_prompts, url): (idx, url)
+                executor.submit(scrape_prompts_and_metadata, url): (idx, url)
                 for idx, url in enumerate(urls, 1)
                 if url not in visited_urls
             }
@@ -218,18 +227,25 @@ def main() -> None:
                 idx, url = future_to_url[future]
                 sys.stderr.write(f"[INFO] ({idx}/{len(urls)}) Processing URL: {url}\n")
                 try:
-                    prompts = future.result()
+                    result = future.result()
+                    prompts = result["prompts"]
                     sys.stderr.write(f"[INFO] Found {len(prompts)} prompts in {url}\n")
                     for prompt in prompts:
                         pair = (prompt, url)
                         if pair not in seen:
                             seen.add(pair)
-                            new_rows.append({"prompt": prompt, "source url": url, "query": query})
+                            new_rows.append({
+                                "prompt": prompt,
+                                "source url": url,
+                                "query": query,
+                                "published_time": result["published_time"],
+                                "modified_time": result["modified_time"],
+                                "author": result["author"],
+                            })
                     sys.stderr.write(f"[INFO] Finished processing {url}\n")
                     # Write to prompts.csv after each URL
                     write_header = not os.path.exists(prompts_file)
                     with open(prompts_file, "a", encoding="utf-8", newline='') as f:
-                        fieldnames = ["prompt", "source url", "query"]
                         writer = csv.DictWriter(f, fieldnames=fieldnames)
                         if write_header:
                             writer.writeheader()
