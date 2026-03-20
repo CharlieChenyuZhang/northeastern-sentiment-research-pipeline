@@ -61,7 +61,7 @@ FIRECRAWL_EXTRACTION_PROMPT = (
 # ---------------------------------------------------------------------------
 OPENAI_MODEL = "gpt-5.3"  # supports logprobs
 OPENAI_TEMPERATURE = 0
-OPENAI_TEMPERATURE_COMPREHENSIVE = 0.3  # >0 so multi-run merging produces diverse results
+OPENAI_TEMPERATURE_COMPREHENSIVE = 0.7  # per Wang et al. 2022 (self-consistency), 0.7 balances diversity & coherence
 ANALYSIS_WORKERS = 6
 
 # ---------------------------------------------------------------------------
