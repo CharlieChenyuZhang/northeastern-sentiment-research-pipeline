@@ -132,7 +132,15 @@ def _ensure_emotion_dict(raw) -> dict[str, float]:
     Handles dict, list of strings, or comma-separated string.
     """
     if isinstance(raw, dict):
-        return {k: float(v) for k, v in raw.items() if float(v) > 0}
+        result = {}
+        for k, v in raw.items():
+            try:
+                fv = float(v)
+                if fv > 0:
+                    result[k] = fv
+            except (ValueError, TypeError):
+                result[k] = 1.0  # present but no numeric confidence
+        return result
     if isinstance(raw, list):
         return {str(e): 1.0 for e in raw if e}
     if isinstance(raw, str) and raw:

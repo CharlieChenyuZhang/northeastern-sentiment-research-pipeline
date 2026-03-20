@@ -219,25 +219,28 @@ def plot_company(
     fig, ax1 = plt.subplots(figsize=(14, 6))
     dates = pd.to_datetime(merged.index)
 
-    # Sentiment on left y-axis
-    colors = {
-        "article_sentiment": "#2196F3",
-        "reader_sentiment": "#FF9800",
-        "article_emotion_intensity": "#4CAF50",
-        "reader_emotion_intensity": "#E91E63",
+    # Sentiment lines on left y-axis (scale: -1 to 1)
+    sent_colors = {
+        "article_sentiment": ("#2196F3", "Article Sentiment"),
+        "reader_sentiment": ("#FF9800", "Reader Sentiment"),
     }
-    labels = {
-        "article_sentiment": "Article Sentiment",
-        "reader_sentiment": "Reader Sentiment",
-        "article_emotion_intensity": "Article Emotion Intensity",
-        "reader_emotion_intensity": "Reader Emotion Intensity",
+    # Normalize emotion intensity to -1..1 scale: remap 0..1 -> -1..1
+    emo_colors = {
+        "article_emotion_intensity": ("#4CAF50", "Article Emotion Intensity"),
+        "reader_emotion_intensity": ("#E91E63", "Reader Emotion Intensity"),
     }
-    for col in colors:
+    for col, (color, label) in sent_colors.items():
         if col in merged.columns:
-            ax1.plot(dates, merged[col], color=colors[col], label=labels[col],
+            ax1.plot(dates, merged[col], color=color, label=label,
                      linewidth=1.5, alpha=0.8, marker="o", markersize=3)
+    for col, (color, label) in emo_colors.items():
+        if col in merged.columns:
+            # Remap 0..1 -> -1..1 so both use the full y-axis range
+            remapped = merged[col] * 2 - 1
+            ax1.plot(dates, remapped, color=color, label=f"{label} (rescaled)",
+                     linewidth=1.5, alpha=0.8, marker="s", markersize=3)
 
-    ax1.set_ylabel("Sentiment / Emotion Score")
+    ax1.set_ylabel("Sentiment Score (& rescaled Emotion Intensity)")
     ax1.set_ylim(-1.3, 1.3)
     ax1.axhline(y=0, color="gray", linestyle="--", linewidth=0.5)
     ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
@@ -271,8 +274,14 @@ def plot_company(
 def compute_correlations(
     daily_sent: pd.DataFrame, stock: pd.DataFrame
 ) -> list[dict]:
-    """Pearson & Spearman for each sentiment column vs stock close."""
-    merged = daily_sent.join(stock, how="inner")
+    """Pearson & Spearman for each sentiment column vs daily stock returns."""
+    merged = daily_sent.join(stock, how="inner").sort_index()
+    if len(merged) < 5:
+        return []
+
+    # Use daily returns instead of raw price to avoid spurious trend correlation
+    merged["daily_return"] = merged["close"].pct_change()
+    merged = merged.dropna(subset=["daily_return"])
     if len(merged) < 5:
         return []
 
@@ -285,7 +294,7 @@ def compute_correlations(
         if col not in merged.columns:
             continue
         x = merged[col].values
-        y = merged["close"].values
+        y = merged["daily_return"].values
         if np.std(x) == 0 or np.std(y) == 0:
             continue
         pearson_r, pearson_p = stats.pearsonr(x, y)
@@ -356,8 +365,10 @@ def lead_lag_analysis(
 def rolling_correlation(
     daily_sent: pd.DataFrame, stock: pd.DataFrame, window: int = 14
 ) -> pd.DataFrame:
-    """Compute rolling Pearson correlation between sentiment and stock price."""
+    """Compute rolling Pearson correlation between sentiment and daily stock returns."""
     merged = daily_sent.join(stock, how="inner").sort_index()
+    merged["daily_return"] = merged["close"].pct_change()
+    merged = merged.dropna(subset=["daily_return"])
     if len(merged) < window:
         return pd.DataFrame()
 
@@ -367,7 +378,7 @@ def rolling_correlation(
             rolling[f"rolling_corr_{col}"] = (
                 merged[col]
                 .rolling(window)
-                .corr(merged["close"])
+                .corr(merged["daily_return"])
             )
     return rolling
 
