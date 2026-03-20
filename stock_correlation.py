@@ -318,42 +318,51 @@ def lead_lag_analysis(
     daily_sent: pd.DataFrame, stock: pd.DataFrame, max_lag: int = 5
 ) -> list[dict]:
     """
-    Shift sentiment by -max_lag..+max_lag days and compute correlation
-    with stock price changes. Positive lag = sentiment leads stock.
+    Shift sentiment by -max_lag..+max_lag calendar days and compute
+    correlation with daily stock returns.
+    Positive lag = sentiment leads stock by N days.
+    Negative lag = stock returns lead sentiment by N days.
+
+    Uses pd.DatetimeIndex.shift to shift by actual calendar days,
+    then inner-joins to get aligned pairs.
     """
     merged = daily_sent.join(stock, how="inner").sort_index()
     if len(merged) < 10:
         return []
 
-    # Daily stock returns
-    close = merged["close"].values.astype(float)
-    returns = np.diff(close) / close[:-1]
+    # Compute daily returns as a series
+    merged["daily_return"] = merged["close"].pct_change()
+    merged = merged.dropna(subset=["daily_return"])
+    if len(merged) < 10:
+        return []
+
+    # Convert index to DatetimeIndex for shifting
+    merged.index = pd.to_datetime(merged.index)
 
     results = []
     sent_cols = ["article_sentiment", "reader_sentiment"]
     for col in sent_cols:
         if col not in merged.columns:
             continue
-        vals = merged[col].values[:-1]  # align with returns
         for lag in range(-max_lag, max_lag + 1):
-            if lag == 0:
-                shifted_sent = vals
-                shifted_ret = returns
-            elif lag > 0:
-                shifted_sent = vals[:-lag]
-                shifted_ret = returns[lag:]
-            else:
-                shifted_sent = vals[-lag:]
-                shifted_ret = returns[:lag]
-            if len(shifted_sent) < 5 or np.std(shifted_sent) == 0:
+            # Shift sentiment forward by `lag` days:
+            #   lag>0 → sentiment from `lag` days ago paired with today's return
+            #   lag<0 → sentiment from `|lag|` days in the future paired with today's return
+            shifted_sent = merged[col].shift(lag, freq="D")
+            # Inner-join shifted sentiment with returns on date
+            paired = pd.DataFrame({
+                "sent": shifted_sent,
+                "ret": merged["daily_return"],
+            }).dropna()
+            if len(paired) < 5 or np.std(paired["sent"]) == 0:
                 continue
-            r, p = stats.pearsonr(shifted_sent, shifted_ret)
+            r, p = stats.pearsonr(paired["sent"], paired["ret"])
             results.append({
                 "metric": col,
                 "lag_days": lag,
                 "pearson_r": round(r, 4),
                 "pearson_p": round(p, 4),
-                "n": len(shifted_sent),
+                "n": len(paired),
             })
     return results
 

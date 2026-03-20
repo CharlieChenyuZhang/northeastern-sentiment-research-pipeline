@@ -109,20 +109,24 @@ def _ensure_sentiment_dist(raw) -> dict[str, float]:
     """
     Convert the LLM's sentiment output to a proper distribution.
     Handles both dict (confidence scores) and plain string label.
+    Case-insensitive matching for robustness.
     """
     if isinstance(raw, dict):
-        # Ensure all standard labels present
+        # Build a lowercase lookup so "positive" matches "Positive"
+        lower_map = {k.strip().lower(): float(v) for k, v in raw.items()
+                     if isinstance(v, (int, float)) or str(v).replace('.', '', 1).isdigit()}
         dist = {}
         for label in config.SENTIMENT_LABELS:
-            dist[label] = float(raw.get(label, 0.0))
+            dist[label] = lower_map.get(label.lower(), 0.0)
         return _normalize_dist(dist)
     # Plain label string — treat as 1.0 confidence
-    label = str(raw).strip()
+    label = str(raw).strip().lower()
     dist = {l: 0.0 for l in config.SENTIMENT_LABELS}
-    if label in dist:
-        dist[label] = 1.0
-    else:
-        dist["Neutral"] = 1.0
+    for l in config.SENTIMENT_LABELS:
+        if l.lower() == label:
+            dist[l] = 1.0
+            return dist
+    dist["Neutral"] = 1.0
     return dist
 
 
