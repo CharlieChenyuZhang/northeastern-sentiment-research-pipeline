@@ -2,7 +2,8 @@
 """
 Step 1 — Discover and scrape company news articles.
 
-Uses SerpAPI for Google search and Firecrawl /scrape for content extraction.
+Uses Firecrawl /search for URL discovery and /scrape for content extraction.
+Falls back to SerpAPI for discovery if available.
 Outputs articles_raw.csv with one row per article.
 
 Usage:
@@ -17,15 +18,48 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
-from serpapi import GoogleSearch
 
 import config
 
 
-def discover_urls(query: str, limit: int) -> list[str]:
+# ---------------------------------------------------------------------------
+# URL Discovery
+# ---------------------------------------------------------------------------
+
+def discover_urls_firecrawl(query: str, limit: int) -> list[str]:
+    """Search via Firecrawl /search endpoint."""
+    if not config.FIRECRAWL_API_KEY:
+        sys.stderr.write("[ERROR] FIRECRAWL_API_KEY not set.\n")
+        return []
+
+    headers = {
+        "Authorization": f"Bearer {config.FIRECRAWL_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    try:
+        resp = requests.post(
+            f"{config.FIRECRAWL_BASE_URL}/search",
+            headers=headers,
+            json={"query": query, "limit": limit},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        return [item["url"] for item in data if item.get("url")]
+    except Exception as e:
+        sys.stderr.write(f"[ERROR] Firecrawl search failed: {e}\n")
+        return []
+
+
+def discover_urls_serpapi(query: str, limit: int) -> list[str]:
     """Search Google via SerpAPI and return up to `limit` URLs."""
     if not config.SERPAPI_API_KEY:
-        sys.stderr.write("[ERROR] SERPAPI_API_KEY not set.\n")
+        return []
+
+    try:
+        from serpapi import GoogleSearch
+    except ImportError:
+        sys.stderr.write("[WARN] serpapi not installed, skipping SerpAPI.\n")
         return []
 
     all_links: list[str] = []
@@ -39,6 +73,9 @@ def discover_urls(query: str, limit: int) -> list[str]:
         }
         try:
             results = GoogleSearch(params).get_dict()
+            if "error" in results:
+                sys.stderr.write(f"[WARN] SerpAPI error: {results['error']}\n")
+                break
             links = [r["link"] for r in results.get("organic_results", [])]
             if not links:
                 break
@@ -50,6 +87,18 @@ def discover_urls(query: str, limit: int) -> list[str]:
             break
     return all_links[:limit]
 
+
+def discover_urls(query: str, limit: int) -> list[str]:
+    """Try SerpAPI first; fall back to Firecrawl /search."""
+    urls = discover_urls_serpapi(query, limit)
+    if urls:
+        return urls
+    return discover_urls_firecrawl(query, limit)
+
+
+# ---------------------------------------------------------------------------
+# Article Scraping
+# ---------------------------------------------------------------------------
 
 def scrape_article(url: str) -> dict | None:
     """Call Firecrawl /scrape to extract article content from a URL."""
@@ -94,6 +143,10 @@ def scrape_article(url: str) -> dict | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Resumability
+# ---------------------------------------------------------------------------
+
 def load_visited_urls(csv_path: str) -> set[str]:
     """Load URLs already present in the output CSV for resumability."""
     visited: set[str] = set()
@@ -105,6 +158,10 @@ def load_visited_urls(csv_path: str) -> set[str]:
                     visited.add(url)
     return visited
 
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main() -> None:
     out_path = config.ARTICLES_RAW_CSV

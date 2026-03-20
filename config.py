@@ -23,17 +23,19 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 # ---------------------------------------------------------------------------
 # Target Companies
 # ---------------------------------------------------------------------------
+# COMPANIES = [
+#     "Apple",
+#     "Tesla",
+#     "Amazon",
+#     "Microsoft",
+#     "Google",
+#     "Meta",
+#     "Netflix",
+#     "NVIDIA",
+# ]
 COMPANIES = [
-    "Apple",
     "Tesla",
-    "Amazon",
-    "Microsoft",
-    "Google",
-    "Meta",
-    "Netflix",
-    "NVIDIA",
 ]
-
 # ---------------------------------------------------------------------------
 # Search & Scrape Settings
 # ---------------------------------------------------------------------------
@@ -41,6 +43,8 @@ _CURRENT_YEAR = datetime.now().year
 SEARCH_QUERIES_PER_COMPANY = [
     "{company} news latest",
     f"{{company}} company news {_CURRENT_YEAR}",
+    f"{{company}} company news {_CURRENT_YEAR - 1}",
+    f"{{company}} company news {_CURRENT_YEAR - 2}",
 ]
 MAX_SEARCH_RESULTS = 50  # per query
 FIRECRAWL_BASE_URL = "https://api.firecrawl.dev/v1"
@@ -59,7 +63,7 @@ FIRECRAWL_EXTRACTION_PROMPT = (
 # ---------------------------------------------------------------------------
 # OpenAI Model Settings
 # ---------------------------------------------------------------------------
-OPENAI_MODEL = "gpt-5.3"  # supports logprobs
+OPENAI_MODEL = "gpt-4o"  # supports logprobs; change to gpt-5.4 etc. as needed
 OPENAI_TEMPERATURE = 0
 OPENAI_TEMPERATURE_COMPREHENSIVE = 0.7  # per Wang et al. 2022 (self-consistency), 0.7 balances diversity & coherence
 ANALYSIS_WORKERS = 6
