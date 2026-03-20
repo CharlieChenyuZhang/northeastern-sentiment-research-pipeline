@@ -6,6 +6,7 @@ A research pipeline that collects news articles about publicly traded companies,
 
 - [Overview](#overview)
 - [Pipeline Architecture](#pipeline-architecture)
+- [News Discovery](#news-discovery)
 - [Data Points Extracted](#data-points-extracted)
 - [Simple vs Comprehensive Analysis](#simple-vs-comprehensive-analysis)
 - [Methodology: Multi-Run Confidence Merging](#methodology-multi-run-confidence-merging)
@@ -18,12 +19,14 @@ A research pipeline that collects news articles about publicly traded companies,
 
 ## Overview
 
-For each of eight target companies (Apple, Tesla, Amazon, Microsoft, Google, Meta, Netflix, NVIDIA), the pipeline:
+For each target company (configurable in `config.py`), the pipeline:
 
-1. **Discovers** news articles via Google search (SerpAPI).
+1. **Discovers** news articles via three sources: Google News, Google Search, and Firecrawl.
 2. **Scrapes** article content using Firecrawl's LLM-based extraction.
 3. **Analyzes** each article along four dimensions using OpenAI's GPT models.
 4. **Correlates** the resulting sentiment time-series with historical stock prices.
+
+Default target companies: Apple, Tesla, Amazon, Microsoft, Google, Meta, Netflix, NVIDIA.
 
 ## Pipeline Architecture
 
@@ -31,7 +34,8 @@ For each of eight target companies (Apple, Tesla, Amazon, Microsoft, Google, Met
 config.py                  (shared constants, prompts, company list)
     |
     v
-search_and_scrape.py       Step 1: SerpAPI search + Firecrawl scrape
+search_and_scrape.py       Step 1: Discover URLs + Firecrawl scrape
+    |                      Sources: Google News + Google Search + Firecrawl
     |                      Output: articles_raw.csv
     |
     +---> sentiment_simple.py          Step 2a: 1 LLM call per article
@@ -49,6 +53,36 @@ search_and_scrape.py       Step 1: SerpAPI search + Firecrawl scrape
 ```
 
 Steps 2a and 2b are independent and can be run in parallel.
+
+## News Discovery
+
+The pipeline uses three complementary discovery methods to maximize article coverage, run in order with deduplication:
+
+| Source | Engine | Typical Yield | Notes |
+|--------|--------|---------------|-------|
+| **Google News** (SerpAPI) | `google_news` | 50–100 per query | News-specific results with dates; also extracts sub-story links from highlight cards |
+| **Google Search** (SerpAPI) | `google` | 10–100 per query | General web results; paginates in batches of 100 |
+| **Firecrawl `/search`** | Firecrawl | 5–10 per query | Fallback if SerpAPI is unavailable |
+
+For each query, all three sources are queried and their results are combined (deduplicated by URL). This typically yields significantly more unique articles than any single source alone.
+
+### Search Queries
+
+The pipeline runs **9 query variations per company** to cover a 3-year range with diverse perspectives:
+
+```
+"{company} news"                          # Broad — current news
+"{company} latest news"                   # Broad — recent coverage
+"{company} company news {year}"           # Year-specific (2024, 2025, 2026)
+"{company} company news {year-1}"
+"{company} company news {year-2}"
+"{company} stock earnings {year}"         # Financial coverage
+"{company} quarterly results {year-1}"
+"{company} business update"               # Business operations
+"{company} investor news"                 # Investor-focused
+```
+
+With `MAX_SEARCH_RESULTS = 50` per query and 9 queries, the pipeline can discover up to **450 unique URLs per company** (before deduplication across queries).
 
 ## Data Points Extracted
 
@@ -150,7 +184,7 @@ For correlation analysis, sentiment labels are mapped to numeric scores:
 | Neutral | 0.0 |
 | Mixed | 0.0 |
 
-Emotion intensity is computed as the mean confidence score across all detected emotions (comprehensive) or `count / 10` capped at 1.0 (simple). On charts, emotion intensity (0–1 scale) is rescaled to -1..+1 to share the y-axis with sentiment.
+Emotion intensity is computed as the mean confidence score across all detected emotions (comprehensive) or `count / 10` capped at 1.0 (simple). On charts, emotion intensity (0-1 scale) is rescaled to -1..+1 to share the y-axis with sentiment.
 
 ## Setup
 
@@ -183,7 +217,17 @@ OPENAI_API_KEY=sk-your-openai-key
 
 ## Usage
 
-Run the pipeline steps in order:
+### Quick Start
+
+Run the entire pipeline with a single command:
+
+```bash
+./run_pipeline.sh
+```
+
+This cleans previous data, then runs all steps in sequence.
+
+### Step-by-Step
 
 ```bash
 # Step 1: Discover and scrape news articles
@@ -212,7 +256,26 @@ All scripts support **resumability** — if interrupted, they detect already-pro
 python stock_correlation.py --input sentiment_simple.csv
 
 # Adjust stock data date range (days before/after article dates)
-python stock_correlation.py --days-before 60 --days-after 60
+python stock_correlation.py --days-before 90 --days-after 30
+```
+
+### Targeting Specific Companies
+
+Edit the `COMPANIES` list in `config.py`:
+
+```python
+COMPANIES = [
+    "Tesla",
+]
+```
+
+To run all eight companies, restore the full list:
+
+```python
+COMPANIES = [
+    "Apple", "Tesla", "Amazon", "Microsoft",
+    "Google", "Meta", "Netflix", "NVIDIA",
+]
 ```
 
 ## Output Files
@@ -239,13 +302,14 @@ All pipeline settings are centralized in `config.py`:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `COMPANIES` | 8 companies | List of target companies |
-| `OPENAI_MODEL` | `gpt-5.3` | Model used for analysis |
+| `OPENAI_MODEL` | `gpt-4o` | Model used for analysis (supports logprobs) |
 | `OPENAI_TEMPERATURE` | `0` | Temperature for simple analysis |
 | `OPENAI_TEMPERATURE_COMPREHENSIVE` | `0.7` | Temperature for comprehensive multi-run analysis |
 | `COMPREHENSIVE_RUNS` | `3` | Number of runs per article in comprehensive mode |
-| `MAX_SEARCH_RESULTS` | `50` | URLs to discover per search query |
+| `MAX_SEARCH_RESULTS` | `50` | Max URLs to discover per query (across all sources) |
+| `SEARCH_QUERIES_PER_COMPANY` | 9 queries | Query templates covering 3 years + topic variations |
 | `MAX_ARTICLE_CHARS` | `48,000` | Truncation limit for article text |
-| `ANALYSIS_WORKERS` | `6` | Concurrent threads for OpenAI calls |
+| `ANALYSIS_WORKERS` | `3` | Concurrent threads for OpenAI calls (kept low for rate limits) |
 | `SCRAPE_WORKERS` | `8` | Concurrent threads for Firecrawl scraping |
 
 ## References
