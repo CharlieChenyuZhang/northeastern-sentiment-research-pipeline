@@ -2,8 +2,12 @@
 """
 Step 1 — Discover and scrape company news articles.
 
-Uses Firecrawl /search for URL discovery and /scrape for content extraction.
-Falls back to SerpAPI for discovery if available.
+Uses three discovery methods (in order):
+  1. SerpAPI Google News — news-specific results with dates
+  2. SerpAPI Google Search — general web results
+  3. Firecrawl /search — fallback if SerpAPI unavailable
+
+Then scrapes each URL via Firecrawl /scrape for content extraction.
 Outputs articles_raw.csv with one row per article.
 
 Usage:
@@ -26,28 +30,40 @@ import config
 # URL Discovery
 # ---------------------------------------------------------------------------
 
-def discover_urls_firecrawl(query: str, limit: int) -> list[str]:
-    """Search via Firecrawl /search endpoint."""
-    if not config.FIRECRAWL_API_KEY:
-        sys.stderr.write("[ERROR] FIRECRAWL_API_KEY not set.\n")
+def discover_urls_google_news(query: str, limit: int) -> list[str]:
+    """Search Google News via SerpAPI (news-specific, returns more results)."""
+    if not config.SERPAPI_API_KEY:
         return []
 
-    headers = {
-        "Authorization": f"Bearer {config.FIRECRAWL_API_KEY}",
-        "Content-Type": "application/json",
+    try:
+        from serpapi import GoogleSearch
+    except ImportError:
+        return []
+
+    params = {
+        "engine": "google_news",
+        "q": query,
+        "api_key": config.SERPAPI_API_KEY,
     }
     try:
-        resp = requests.post(
-            f"{config.FIRECRAWL_BASE_URL}/search",
-            headers=headers,
-            json={"query": query, "limit": limit},
-            timeout=60,
-        )
-        resp.raise_for_status()
-        data = resp.json().get("data", [])
-        return [item["url"] for item in data if item.get("url")]
+        results = GoogleSearch(params).get_dict()
+        if "error" in results:
+            sys.stderr.write(f"[WARN] SerpAPI News error: {results['error']}\n")
+            return []
+        articles = results.get("news_results", [])
+        links = []
+        for a in articles:
+            link = a.get("link")
+            if link:
+                links.append(link)
+            # Also collect sub-stories in highlight cards
+            for sub in a.get("stories", []):
+                sub_link = sub.get("link")
+                if sub_link:
+                    links.append(sub_link)
+        return links[:limit]
     except Exception as e:
-        sys.stderr.write(f"[ERROR] Firecrawl search failed: {e}\n")
+        sys.stderr.write(f"[ERROR] SerpAPI News failed: {e}\n")
         return []
 
 
@@ -88,12 +104,56 @@ def discover_urls_serpapi(query: str, limit: int) -> list[str]:
     return all_links[:limit]
 
 
+def discover_urls_firecrawl(query: str, limit: int) -> list[str]:
+    """Search via Firecrawl /search endpoint (fallback)."""
+    if not config.FIRECRAWL_API_KEY:
+        sys.stderr.write("[ERROR] FIRECRAWL_API_KEY not set.\n")
+        return []
+
+    headers = {
+        "Authorization": f"Bearer {config.FIRECRAWL_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    try:
+        resp = requests.post(
+            f"{config.FIRECRAWL_BASE_URL}/search",
+            headers=headers,
+            json={"query": query, "limit": limit},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        return [item["url"] for item in data if item.get("url")]
+    except Exception as e:
+        sys.stderr.write(f"[ERROR] Firecrawl search failed: {e}\n")
+        return []
+
+
 def discover_urls(query: str, limit: int) -> list[str]:
-    """Try SerpAPI first; fall back to Firecrawl /search."""
-    urls = discover_urls_serpapi(query, limit)
-    if urls:
-        return urls
-    return discover_urls_firecrawl(query, limit)
+    """
+    Combine results from all available sources, deduplicated.
+    Google News first (best for news articles), then regular search,
+    then Firecrawl as fallback.
+    """
+    seen: set[str] = set()
+    all_urls: list[str] = []
+
+    for fn, label in [
+        (discover_urls_google_news, "Google News"),
+        (discover_urls_serpapi, "Google Search"),
+        (discover_urls_firecrawl, "Firecrawl"),
+    ]:
+        urls = fn(query, limit)
+        new = [u for u in urls if u not in seen]
+        if new:
+            sys.stderr.write(f"[INFO]   {label}: +{len(new)} URLs\n")
+            for u in new:
+                seen.add(u)
+                all_urls.append(u)
+        if len(all_urls) >= limit:
+            break
+
+    return all_urls[:limit]
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +238,7 @@ def main() -> None:
             urls = discover_urls(query, config.MAX_SEARCH_RESULTS)
             new_urls = [u for u in urls if u not in visited]
             sys.stderr.write(
-                f"[INFO] Found {len(urls)} URLs, {len(new_urls)} new.\n"
+                f"[INFO] Total: {len(urls)} URLs, {len(new_urls)} new.\n"
             )
 
             with ThreadPoolExecutor(max_workers=config.SCRAPE_WORKERS) as pool:

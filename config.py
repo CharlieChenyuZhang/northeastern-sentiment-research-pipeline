@@ -41,12 +41,20 @@ COMPANIES = [
 # ---------------------------------------------------------------------------
 _CURRENT_YEAR = datetime.now().year
 SEARCH_QUERIES_PER_COMPANY = [
-    "{company} news latest",
+    # Broad news queries (Google News returns ~50-100 per query)
+    "{company} news",
+    "{company} latest news",
+    # Year-specific queries
     f"{{company}} company news {_CURRENT_YEAR}",
     f"{{company}} company news {_CURRENT_YEAR - 1}",
     f"{{company}} company news {_CURRENT_YEAR - 2}",
+    # Topic-specific queries for richer coverage
+    f"{{company}} stock earnings {_CURRENT_YEAR}",
+    f"{{company}} quarterly results {_CURRENT_YEAR - 1}",
+    "{company} business update",
+    "{company} investor news",
 ]
-MAX_SEARCH_RESULTS = 50  # per query
+MAX_SEARCH_RESULTS = 50  # per query (across all sources combined)
 FIRECRAWL_BASE_URL = "https://api.firecrawl.dev/v1"
 SCRAPE_WORKERS = 8
 
@@ -66,7 +74,7 @@ FIRECRAWL_EXTRACTION_PROMPT = (
 OPENAI_MODEL = "gpt-4o"  # supports logprobs; change to gpt-5.4 etc. as needed
 OPENAI_TEMPERATURE = 0
 OPENAI_TEMPERATURE_COMPREHENSIVE = 0.7  # per Wang et al. 2022 (self-consistency), 0.7 balances diversity & coherence
-ANALYSIS_WORKERS = 6
+ANALYSIS_WORKERS = 3  # keep low to avoid OpenAI TPM rate limits
 
 # ---------------------------------------------------------------------------
 # Prompt Templates — stored as constants so they end up in the final output
