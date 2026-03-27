@@ -41,6 +41,7 @@ import config
 COMPANY_TICKERS = {
     "Apple": "AAPL",
     "Tesla": "TSLA",
+    "JPMorgan Chase": "JPM",
     "Amazon": "AMZN",
     "Microsoft": "MSFT",
     "Google": "GOOGL",

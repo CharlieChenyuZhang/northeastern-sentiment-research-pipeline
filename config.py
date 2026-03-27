@@ -8,7 +8,7 @@ definitions live here so every script imports from a single source of truth.
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import date
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,39 +23,47 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 # ---------------------------------------------------------------------------
 # Target Companies
 # ---------------------------------------------------------------------------
-# COMPANIES = [
-#     "Apple",
-#     "Tesla",
-#     "Amazon",
-#     "Microsoft",
-#     "Google",
-#     "Meta",
-#     "Netflix",
-#     "NVIDIA",
-# ]
+# Research focus: one company and one fixed calendar year.
+TARGET_YEAR = 2025
+TARGET_START_DATE = date(TARGET_YEAR, 1, 1)
+TARGET_END_DATE = date(TARGET_YEAR, 12, 31)
+
 COMPANIES = [
-    "Tesla",
+    "JPMorgan Chase",
 ]
+
+COMPANY_SEARCH_TERMS = {
+    "JPMorgan Chase": "JPMorgan Chase JPM",
+}
 # ---------------------------------------------------------------------------
 # Search & Scrape Settings
 # ---------------------------------------------------------------------------
-_CURRENT_YEAR = datetime.now().year
-SEARCH_QUERIES_PER_COMPANY = [
-    # Broad news queries (Google News returns ~50-100 per query)
-    "{company} news",
-    "{company} latest news",
-    # Year-specific queries
-    f"{{company}} company news {_CURRENT_YEAR}",
-    f"{{company}} company news {_CURRENT_YEAR - 1}",
-    f"{{company}} company news {_CURRENT_YEAR - 2}",
-    # Topic-specific queries for richer coverage
-    f"{{company}} stock earnings {_CURRENT_YEAR}",
-    f"{{company}} quarterly results {_CURRENT_YEAR - 1}",
-    "{company} business update",
-    "{company} investor news",
+TARGET_MONTHS = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 ]
-MAX_SEARCH_RESULTS = 50  # per query (across all sources combined)
+
+SEARCH_QUERIES_PER_COMPANY = [
+    (
+        f"{{search_term}} news what happened in {month} {TARGET_YEAR}"
+    )
+    for month in TARGET_MONTHS
+]
+SERPAPI_RESULTS_PER_PAGE = 10
+MAX_RESULTS_PER_SOURCE = 100
+MAX_SEARCH_RESULTS = 250  # per query after combining all sources
 FIRECRAWL_BASE_URL = "https://api.firecrawl.dev/v1"
+FIRECRAWL_SEARCH_SOURCES = ["web", "news"]
 SCRAPE_WORKERS = 8
 
 # Firecrawl extraction prompt — tells the LLM what to pull from each page

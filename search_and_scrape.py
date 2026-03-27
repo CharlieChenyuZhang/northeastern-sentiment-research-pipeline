@@ -20,8 +20,10 @@ import csv
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
 import requests
+import pandas as pd
 
 import config
 
@@ -31,7 +33,7 @@ import config
 # ---------------------------------------------------------------------------
 
 def discover_urls_google_news(query: str, limit: int) -> list[str]:
-    """Search Google News via SerpAPI (news-specific, returns more results)."""
+    """Search Google News via SerpAPI and paginate to collect more URLs."""
     if not config.SERPAPI_API_KEY:
         return []
 
@@ -40,31 +42,48 @@ def discover_urls_google_news(query: str, limit: int) -> list[str]:
     except ImportError:
         return []
 
-    params = {
-        "engine": "google_news",
-        "q": query,
-        "api_key": config.SERPAPI_API_KEY,
-    }
-    try:
-        results = GoogleSearch(params).get_dict()
-        if "error" in results:
-            sys.stderr.write(f"[WARN] SerpAPI News error: {results['error']}\n")
-            return []
-        articles = results.get("news_results", [])
-        links = []
-        for a in articles:
-            link = a.get("link")
-            if link:
-                links.append(link)
-            # Also collect sub-stories in highlight cards
-            for sub in a.get("stories", []):
-                sub_link = sub.get("link")
-                if sub_link:
-                    links.append(sub_link)
-        return links[:limit]
-    except Exception as e:
-        sys.stderr.write(f"[ERROR] SerpAPI News failed: {e}\n")
-        return []
+    all_links: list[str] = []
+    seen: set[str] = set()
+
+    for start in range(0, limit, config.SERPAPI_RESULTS_PER_PAGE):
+        params = {
+            "engine": "google_news",
+            "q": query,
+            "api_key": config.SERPAPI_API_KEY,
+            "start": start,
+        }
+        try:
+            results = GoogleSearch(params).get_dict()
+            if "error" in results:
+                sys.stderr.write(f"[WARN] SerpAPI News error: {results['error']}\n")
+                break
+
+            page_links: list[str] = []
+            for article in results.get("news_results", []):
+                link = article.get("link")
+                if link:
+                    page_links.append(link)
+                # Also collect sub-stories in highlight cards.
+                for sub in article.get("stories", []):
+                    sub_link = sub.get("link")
+                    if sub_link:
+                        page_links.append(sub_link)
+
+            new_links = [link for link in page_links if link not in seen]
+            if not new_links:
+                break
+
+            for link in new_links:
+                seen.add(link)
+                all_links.append(link)
+
+            if len(all_links) >= limit:
+                break
+        except Exception as e:
+            sys.stderr.write(f"[ERROR] SerpAPI News failed at start={start}: {e}\n")
+            break
+
+    return all_links[:limit]
 
 
 def discover_urls_serpapi(query: str, limit: int) -> list[str]:
@@ -79,13 +98,13 @@ def discover_urls_serpapi(query: str, limit: int) -> list[str]:
         return []
 
     all_links: list[str] = []
-    for start in range(0, limit, 100):
+    for start in range(0, limit, config.SERPAPI_RESULTS_PER_PAGE):
         params = {
             "engine": "google",
             "q": query,
             "api_key": config.SERPAPI_API_KEY,
             "start": start,
-            "num": min(100, limit - start),
+            "num": min(config.SERPAPI_RESULTS_PER_PAGE, limit - start),
         }
         try:
             results = GoogleSearch(params).get_dict()
@@ -105,7 +124,7 @@ def discover_urls_serpapi(query: str, limit: int) -> list[str]:
 
 
 def discover_urls_firecrawl(query: str, limit: int) -> list[str]:
-    """Search via Firecrawl /search endpoint (fallback)."""
+    """Search via Firecrawl /search endpoint."""
     if not config.FIRECRAWL_API_KEY:
         sys.stderr.write("[ERROR] FIRECRAWL_API_KEY not set.\n")
         return []
@@ -114,13 +133,27 @@ def discover_urls_firecrawl(query: str, limit: int) -> list[str]:
         "Authorization": f"Bearer {config.FIRECRAWL_API_KEY}",
         "Content-Type": "application/json",
     }
+    payload = {
+        "query": query,
+        "limit": limit,
+        "sources": config.FIRECRAWL_SEARCH_SOURCES,
+    }
     try:
         resp = requests.post(
             f"{config.FIRECRAWL_BASE_URL}/search",
             headers=headers,
-            json={"query": query, "limit": limit},
+            json=payload,
             timeout=60,
         )
+        if resp.status_code >= 400 and "sources" in payload:
+            # Older Firecrawl endpoints may reject `sources`; retry with the
+            # simpler payload rather than dropping the provider entirely.
+            resp = requests.post(
+                f"{config.FIRECRAWL_BASE_URL}/search",
+                headers=headers,
+                json={"query": query, "limit": limit},
+                timeout=60,
+            )
         resp.raise_for_status()
         data = resp.json().get("data", [])
         return [item["url"] for item in data if item.get("url")]
@@ -133,7 +166,7 @@ def discover_urls(query: str, limit: int) -> list[str]:
     """
     Combine results from all available sources, deduplicated.
     Google News first (best for news articles), then regular search,
-    then Firecrawl as fallback.
+    then Firecrawl.
     """
     seen: set[str] = set()
     all_urls: list[str] = []
@@ -143,15 +176,13 @@ def discover_urls(query: str, limit: int) -> list[str]:
         (discover_urls_serpapi, "Google Search"),
         (discover_urls_firecrawl, "Firecrawl"),
     ]:
-        urls = fn(query, limit)
+        urls = fn(query, config.MAX_RESULTS_PER_SOURCE)
         new = [u for u in urls if u not in seen]
         if new:
             sys.stderr.write(f"[INFO]   {label}: +{len(new)} URLs\n")
             for u in new:
                 seen.add(u)
                 all_urls.append(u)
-        if len(all_urls) >= limit:
-            break
 
     return all_urls[:limit]
 
@@ -203,6 +234,42 @@ def scrape_article(url: str) -> dict | None:
     return None
 
 
+def parse_published_date(raw: str) -> datetime | None:
+    """Try common date formats; return None on failure."""
+    raw = raw.strip()
+    if not raw or raw.lower() == "n/a":
+        return None
+
+    for fmt in (
+        "%Y-%m-%d",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%B %d, %Y",
+        "%b %d, %Y",
+        "%m/%d/%Y",
+        "%d/%m/%Y",
+        "%Y/%m/%d",
+    ):
+        try:
+            return datetime.strptime(raw, fmt)
+        except (ValueError, OverflowError):
+            continue
+
+    try:
+        return pd.to_datetime(raw).to_pydatetime()
+    except Exception:
+        return None
+
+
+def in_target_window(published_date: str) -> bool:
+    """Keep only articles whose published date falls within the research window."""
+    parsed = parse_published_date(published_date)
+    if parsed is None:
+        return False
+    return config.TARGET_START_DATE <= parsed.date() <= config.TARGET_END_DATE
+
+
 # ---------------------------------------------------------------------------
 # Resumability
 # ---------------------------------------------------------------------------
@@ -233,7 +300,12 @@ def main() -> None:
 
     for company in config.COMPANIES:
         for query_tmpl in config.SEARCH_QUERIES_PER_COMPANY:
-            query = query_tmpl.format(company=company)
+            search_term = config.COMPANY_SEARCH_TERMS.get(company, company)
+            query = query_tmpl.format(
+                company=company,
+                search_term=search_term,
+                year=config.TARGET_YEAR,
+            )
             sys.stderr.write(f"[INFO] Searching: '{query}'\n")
             urls = discover_urls(query, config.MAX_SEARCH_RESULTS)
             new_urls = [u for u in urls if u not in visited]
@@ -250,6 +322,12 @@ def main() -> None:
                     try:
                         result = future.result()
                         if result is None:
+                            continue
+                        if not in_target_window(result["published_date"]):
+                            sys.stderr.write(
+                                "[INFO] Skipping out-of-range or undated article: "
+                                f"{url}\n"
+                            )
                             continue
                         row = {
                             "company": company,

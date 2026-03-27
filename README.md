@@ -26,7 +26,7 @@ For each target company (configurable in `config.py`), the pipeline:
 3. **Analyzes** each article along four dimensions using OpenAI's GPT models.
 4. **Correlates** the resulting sentiment time-series with historical stock prices.
 
-Default target companies: Apple, Tesla, Amazon, Microsoft, Google, Meta, Netflix, NVIDIA.
+Current target company: JPMorgan Chase.
 
 ## Pipeline Architecture
 
@@ -64,25 +64,24 @@ The pipeline uses three complementary discovery methods to maximize article cove
 | **Google Search** (SerpAPI) | `google` | 10–100 per query | General web results; paginates in batches of 100 |
 | **Firecrawl `/search`** | Firecrawl | 5–10 per query | Fallback if SerpAPI is unavailable |
 
-For each query, all three sources are queried and their results are combined (deduplicated by URL). This typically yields significantly more unique articles than any single source alone.
+For each query, all three sources are queried and their results are combined (deduplicated by URL). The pipeline paginates SerpAPI results and lets every source contribute before trimming the final deduplicated list, which yields materially broader coverage than stopping after the first source hits a cap.
 
 ### Search Queries
 
-The pipeline runs **9 query variations per company** to cover a 3-year range with diverse perspectives:
+The pipeline runs **12 month-by-month news queries per company** for a fixed calendar year:
 
 ```
-"{company} news"                          # Broad — current news
-"{company} latest news"                   # Broad — recent coverage
-"{company} company news {year}"           # Year-specific (2024, 2025, 2026)
-"{company} company news {year-1}"
-"{company} company news {year-2}"
-"{company} stock earnings {year}"         # Financial coverage
-"{company} quarterly results {year-1}"
-"{company} business update"               # Business operations
-"{company} investor news"                 # Investor-focused
+"{search_term} news what happened in January 2025"
+"{search_term} news what happened in February 2025"
+...
+"{search_term} news what happened in December 2025"
 ```
 
-With `MAX_SEARCH_RESULTS = 50` per query and 9 queries, the pipeline can discover up to **450 unique URLs per company** (before deduplication across queries).
+For JPMorgan Chase, `search_term` is `JPMorgan Chase JPM` to improve retrieval across both company-name and ticker-based coverage.
+
+With the current defaults, the pipeline will try to collect up to **100 URLs per source** and keep up to **250 deduplicated URLs per query**.
+
+The scraper also enforces a strict publication-date filter, so only articles dated between **January 1, 2025** and **December 31, 2025** are written to `articles_raw.csv`.
 
 ## Data Points Extracted
 
