@@ -59,6 +59,7 @@ SENTIMENT_SCORES = {
 }
 
 OUTPUT_DIR = "analysis_output"
+SMOOTHING_WINDOWS = [7, 14, 30]
 
 
 # ---------------------------------------------------------------------------
@@ -166,15 +167,23 @@ def _emotion_intensity(raw: str) -> float:
 def fetch_stock_prices(
     ticker: str, start: str, end: str
 ) -> pd.DataFrame:
-    """Download daily closing prices from Yahoo Finance."""
+    """Download daily prices and compute returns from adjusted close when available."""
     df = yf.download(ticker, start=start, end=end, progress=False)
     if df.empty:
         return df
     # yfinance may return MultiIndex columns — flatten them
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-    df = df[["Close"]].copy()
-    df.columns = ["close"]
+    cols = ["Close"]
+    if "Adj Close" in df.columns:
+        cols.append("Adj Close")
+    df = df[cols].copy()
+    rename_map = {"Close": "close", "Adj Close": "adjusted_close"}
+    df = df.rename(columns=rename_map)
+    if "adjusted_close" not in df.columns:
+        df["adjusted_close"] = df["close"]
+    # Compute returns on the full stock series before joining to sentiment dates.
+    df["daily_return"] = df["adjusted_close"].pct_change()
     df.index = pd.to_datetime(df.index).date  # type: ignore[assignment]
     df.index.name = "date"
     return df
@@ -205,67 +214,165 @@ def daily_sentiment(articles: pd.DataFrame, company: str) -> pd.DataFrame:
 # Plotting
 # ---------------------------------------------------------------------------
 
-def plot_company(
+def _plot_metric_group(
     company: str,
-    daily_sent: pd.DataFrame,
-    stock: pd.DataFrame,
+    merged: pd.DataFrame,
     out_dir: str,
+    metric_colors: dict[str, tuple[str, str]],
+    ylabel: str,
+    title: str,
+    filename: str,
+    rescale: bool = False,
+    stock_series: pd.Series | None = None,
+    stock_label: str = "Stock Close",
+    metric_series: dict[str, pd.Series] | None = None,
+    metric_label_suffix: str = "",
 ) -> str:
-    """Create a dual-axis chart: sentiment lines + stock price."""
-    merged = daily_sent.join(stock, how="inner")
-    if merged.empty:
-        sys.stderr.write(f"[WARN] No overlapping dates for {company}, skipping plot.\n")
-        return ""
-
+    """Create one dual-axis chart for a related metric group plus stock close."""
     fig, ax1 = plt.subplots(figsize=(14, 6))
     dates = pd.to_datetime(merged.index)
 
-    # Sentiment lines on left y-axis (scale: -1 to 1)
-    sent_colors = {
-        "article_sentiment": ("#2196F3", "Article Sentiment"),
-        "reader_sentiment": ("#FF9800", "Reader Sentiment"),
-    }
-    # Normalize emotion intensity to -1..1 scale: remap 0..1 -> -1..1
-    emo_colors = {
-        "article_emotion_intensity": ("#4CAF50", "Article Emotion Intensity"),
-        "reader_emotion_intensity": ("#E91E63", "Reader Emotion Intensity"),
-    }
-    for col, (color, label) in sent_colors.items():
-        if col in merged.columns:
-            ax1.plot(dates, merged[col], color=color, label=label,
-                     linewidth=1.5, alpha=0.8, marker="o", markersize=3)
-    for col, (color, label) in emo_colors.items():
-        if col in merged.columns:
-            # Remap 0..1 -> -1..1 so both use the full y-axis range
-            remapped = merged[col] * 2 - 1
-            ax1.plot(dates, remapped, color=color, label=f"{label} (rescaled)",
-                     linewidth=1.5, alpha=0.8, marker="s", markersize=3)
+    for col, (color, label) in metric_colors.items():
+        if col not in merged.columns:
+            continue
+        source = metric_series[col] if metric_series and col in metric_series else merged[col]
+        values = source * 2 - 1 if rescale else source
+        rendered_label = f"{label} (rescaled)" if rescale else label
+        if metric_label_suffix:
+            rendered_label = f"{rendered_label} {metric_label_suffix}"
+        marker = "s" if rescale else "o"
+        ax1.plot(
+            dates,
+            values,
+            color=color,
+            label=rendered_label,
+            linewidth=1.5,
+            alpha=0.8,
+            marker=marker,
+            markersize=3,
+        )
 
-    ax1.set_ylabel("Sentiment Score (& rescaled Emotion Intensity)")
+    ax1.set_ylabel(ylabel)
     ax1.set_ylim(-1.3, 1.3)
     ax1.axhline(y=0, color="gray", linestyle="--", linewidth=0.5)
     ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
     ax1.xaxis.set_major_locator(mdates.AutoDateLocator())
     fig.autofmt_xdate(rotation=45)
 
-    # Stock price on right y-axis
     ax2 = ax1.twinx()
-    ax2.plot(dates, merged["close"], color="#9C27B0", label="Stock Close",
-             linewidth=2, alpha=0.6, linestyle="--")
+    rendered_stock = stock_series if stock_series is not None else merged["close"]
+    ax2.plot(
+        dates,
+        rendered_stock,
+        color="#9C27B0",
+        label=stock_label,
+        linewidth=2,
+        alpha=0.6,
+        linestyle="--",
+    )
     ax2.set_ylabel("Stock Price ($)")
 
-    # Combined legend
     lines1, labels1 = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
     ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper left", fontsize=8)
 
-    plt.title(f"{company} — Sentiment & Emotion vs Stock Price")
+    plt.title(title)
     plt.tight_layout()
 
-    path = os.path.join(out_dir, f"{company.lower()}_sentiment_vs_stock.png")
+    path = os.path.join(out_dir, filename)
     plt.savefig(path, dpi=150)
     plt.close()
     return path
+
+
+def plot_company(
+    company: str,
+    daily_sent: pd.DataFrame,
+    stock: pd.DataFrame,
+    out_dir: str,
+) -> list[str]:
+    """Create separate sentiment-vs-stock and emotion-vs-stock charts."""
+    merged = daily_sent.join(stock, how="inner")
+    if merged.empty:
+        sys.stderr.write(f"[WARN] No overlapping dates for {company}, skipping plot.\n")
+        return []
+
+    sentiment_path = _plot_metric_group(
+        company=company,
+        merged=merged,
+        out_dir=out_dir,
+        metric_colors={
+            "article_sentiment": ("#2196F3", "Article Sentiment"),
+            "reader_sentiment": ("#FF9800", "Reader Sentiment"),
+        },
+        ylabel="Sentiment Score",
+        title=f"{company} — Sentiment vs Stock Price",
+        filename=f"{company.lower()}_sentiment_vs_stock.png",
+        rescale=False,
+    )
+    emotion_path = _plot_metric_group(
+        company=company,
+        merged=merged,
+        out_dir=out_dir,
+        metric_colors={
+            "article_emotion_intensity": ("#4CAF50", "Article Emotion Intensity"),
+            "reader_emotion_intensity": ("#E91E63", "Reader Emotion Intensity"),
+        },
+        ylabel="Rescaled Emotion Intensity",
+        title=f"{company} — Emotion Intensity vs Stock Price",
+        filename=f"{company.lower()}_emotion_vs_stock.png",
+        rescale=True,
+    )
+    paths = [sentiment_path, emotion_path]
+    for window in SMOOTHING_WINDOWS:
+        smoothed_close = merged["close"].rolling(window, min_periods=1).mean()
+        smoothed_sentiment = {
+            "article_sentiment": merged["article_sentiment"].rolling(window, min_periods=1).mean(),
+            "reader_sentiment": merged["reader_sentiment"].rolling(window, min_periods=1).mean(),
+        }
+        smoothed_emotion = {
+            "article_emotion_intensity": merged["article_emotion_intensity"].rolling(window, min_periods=1).mean(),
+            "reader_emotion_intensity": merged["reader_emotion_intensity"].rolling(window, min_periods=1).mean(),
+        }
+        paths.append(
+            _plot_metric_group(
+                company=company,
+                merged=merged,
+                out_dir=out_dir,
+                metric_colors={
+                    "article_sentiment": ("#2196F3", "Article Sentiment"),
+                    "reader_sentiment": ("#FF9800", "Reader Sentiment"),
+                },
+                ylabel="Sentiment Score",
+                title=f"{company} — Smoothed Sentiment vs Smoothed Stock Price ({window}-day)",
+                filename=f"{company.lower()}_sentiment_vs_stock_smoothed_{window}d.png",
+                rescale=False,
+                stock_series=smoothed_close,
+                stock_label=f"Stock Close ({window}-day rolling avg)",
+                metric_series=smoothed_sentiment,
+                metric_label_suffix=f"({window}-day rolling avg)",
+            )
+        )
+        paths.append(
+            _plot_metric_group(
+                company=company,
+                merged=merged,
+                out_dir=out_dir,
+                metric_colors={
+                    "article_emotion_intensity": ("#4CAF50", "Article Emotion Intensity"),
+                    "reader_emotion_intensity": ("#E91E63", "Reader Emotion Intensity"),
+                },
+                ylabel="Rescaled Emotion Intensity",
+                title=f"{company} — Smoothed Emotion Intensity vs Smoothed Stock Price ({window}-day)",
+                filename=f"{company.lower()}_emotion_vs_stock_smoothed_{window}d.png",
+                rescale=True,
+                stock_series=smoothed_close,
+                stock_label=f"Stock Close ({window}-day rolling avg)",
+                metric_series=smoothed_emotion,
+                metric_label_suffix=f"({window}-day rolling avg)",
+            )
+        )
+    return paths
 
 
 # ---------------------------------------------------------------------------
@@ -280,8 +387,6 @@ def compute_correlations(
     if len(merged) < 5:
         return []
 
-    # Use daily returns instead of raw price to avoid spurious trend correlation
-    merged["daily_return"] = merged["close"].pct_change()
     merged = merged.dropna(subset=["daily_return"])
     if len(merged) < 5:
         return []
@@ -331,8 +436,6 @@ def lead_lag_analysis(
     if len(merged) < 10:
         return []
 
-    # Compute daily returns as a series
-    merged["daily_return"] = merged["close"].pct_change()
     merged = merged.dropna(subset=["daily_return"])
     if len(merged) < 10:
         return []
@@ -373,17 +476,19 @@ def lead_lag_analysis(
 # ---------------------------------------------------------------------------
 
 def rolling_correlation(
-    daily_sent: pd.DataFrame, stock: pd.DataFrame, window: int = 14
+    daily_sent: pd.DataFrame,
+    stock: pd.DataFrame,
+    metrics: list[str],
+    window: int = 14,
 ) -> pd.DataFrame:
-    """Compute rolling Pearson correlation between sentiment and daily stock returns."""
+    """Compute rolling Pearson correlation between selected metrics and daily stock returns."""
     merged = daily_sent.join(stock, how="inner").sort_index()
-    merged["daily_return"] = merged["close"].pct_change()
     merged = merged.dropna(subset=["daily_return"])
     if len(merged) < window:
         return pd.DataFrame()
 
     rolling = pd.DataFrame(index=merged.index)
-    for col in ["article_sentiment", "reader_sentiment"]:
+    for col in metrics:
         if col in merged.columns:
             rolling[f"rolling_corr_{col}"] = (
                 merged[col]
@@ -394,7 +499,12 @@ def rolling_correlation(
 
 
 def plot_rolling_correlation(
-    company: str, rolling_df: pd.DataFrame, out_dir: str
+    company: str,
+    rolling_df: pd.DataFrame,
+    out_dir: str,
+    title: str,
+    filename: str,
+    label_map: dict[str, str] | None = None,
 ) -> str:
     if rolling_df.empty:
         return ""
@@ -402,16 +512,18 @@ def plot_rolling_correlation(
     fig, ax = plt.subplots(figsize=(14, 4))
     dates = pd.to_datetime(rolling_df.index)
     for col in rolling_df.columns:
-        ax.plot(dates, rolling_df[col], label=col.replace("rolling_corr_", ""), linewidth=1.5)
+        raw_label = col.replace("rolling_corr_", "")
+        rendered_label = label_map.get(raw_label, raw_label) if label_map else raw_label
+        ax.plot(dates, rolling_df[col], label=rendered_label, linewidth=1.5)
     ax.axhline(y=0, color="gray", linestyle="--", linewidth=0.5)
     ax.set_ylabel("Rolling Correlation")
-    ax.set_title(f"{company} — Rolling 14-day Correlation (Sentiment vs Stock)")
+    ax.set_title(title)
     ax.legend(fontsize=8)
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
     fig.autofmt_xdate(rotation=45)
     plt.tight_layout()
 
-    path = os.path.join(out_dir, f"{company.lower()}_rolling_correlation.png")
+    path = os.path.join(out_dir, filename)
     plt.savefig(path, dpi=150)
     plt.close()
     return path
@@ -478,8 +590,8 @@ def main() -> None:
             continue
 
         # 1. Plot sentiment vs stock
-        chart_path = plot_company(company, daily_sent, stock, OUTPUT_DIR)
-        if chart_path:
+        chart_paths = plot_company(company, daily_sent, stock, OUTPUT_DIR)
+        for chart_path in chart_paths:
             sys.stderr.write(f"[OK]   Chart: {chart_path}\n")
 
         # 2. Correlation analysis
@@ -506,10 +618,43 @@ def main() -> None:
         all_lead_lag.extend(ll)
 
         # 4. Rolling correlation
-        rolling_df = rolling_correlation(daily_sent, stock)
-        rc_path = plot_rolling_correlation(company, rolling_df, OUTPUT_DIR)
-        if rc_path:
-            sys.stderr.write(f"[OK]   Rolling correlation chart: {rc_path}\n")
+        sentiment_rolling_df = rolling_correlation(
+            daily_sent,
+            stock,
+            metrics=["article_sentiment", "reader_sentiment"],
+        )
+        sentiment_rc_path = plot_rolling_correlation(
+            company,
+            sentiment_rolling_df,
+            OUTPUT_DIR,
+            title=f"{company} — Rolling 14-day Correlation (Sentiment vs Stock)",
+            filename=f"{company.lower()}_rolling_correlation.png",
+            label_map={
+                "article_sentiment": "Article Sentiment",
+                "reader_sentiment": "Reader Sentiment",
+            },
+        )
+        if sentiment_rc_path:
+            sys.stderr.write(f"[OK]   Rolling correlation chart: {sentiment_rc_path}\n")
+
+        emotion_rolling_df = rolling_correlation(
+            daily_sent,
+            stock,
+            metrics=["article_emotion_intensity", "reader_emotion_intensity"],
+        )
+        emotion_rc_path = plot_rolling_correlation(
+            company,
+            emotion_rolling_df,
+            OUTPUT_DIR,
+            title=f"{company} — Rolling 14-day Correlation (Emotion Intensity vs Stock)",
+            filename=f"{company.lower()}_rolling_emotion_correlation.png",
+            label_map={
+                "article_emotion_intensity": "Article Emotion Intensity",
+                "reader_emotion_intensity": "Reader Emotion Intensity",
+            },
+        )
+        if emotion_rc_path:
+            sys.stderr.write(f"[OK]   Rolling correlation chart: {emotion_rc_path}\n")
 
     # Save correlation summaries
     if all_correlations:
