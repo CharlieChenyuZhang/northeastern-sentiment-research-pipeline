@@ -58,7 +58,7 @@ SENTIMENT_SCORES = {
     "mixed": 0.0,
 }
 
-OUTPUT_DIR = "analysis_output"
+OUTPUT_DIR = config.ANALYSIS_OUTPUT_DIR
 SMOOTHING_WINDOWS = [7, 14, 30]
 
 

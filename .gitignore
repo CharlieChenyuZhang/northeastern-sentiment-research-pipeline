@@ -1,6 +1,5 @@
 .env
 *.csv
 discovered_urls/
-analysis_output/
 __pycache__/
 *.pyc

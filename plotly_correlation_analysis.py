@@ -29,7 +29,7 @@ from stock_correlation import (
     load_articles,
 )
 
-OUTPUT_DIR = "analysis_output"
+OUTPUT_DIR = config.ANALYSIS_OUTPUT_DIR
 TEXT_COLS = [
     "article_sentiment",
     "reader_sentiment",

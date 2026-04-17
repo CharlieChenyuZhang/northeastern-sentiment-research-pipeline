@@ -19,6 +19,7 @@ from __future__ import annotations
 import csv
 import os
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -191,6 +192,19 @@ def discover_urls(query: str, limit: int) -> list[str]:
 # Article Scraping
 # ---------------------------------------------------------------------------
 
+def retry_delay_seconds(response: requests.Response | None, attempt_number: int) -> float:
+    """Return the delay before the next retry, honoring Retry-After if present."""
+    if response is not None:
+        retry_after = (response.headers.get("Retry-After") or "").strip()
+        try:
+            if retry_after:
+                return max(float(retry_after), 0.0)
+        except ValueError:
+            pass
+
+    return config.SCRAPE_RETRY_BACKOFF_SECONDS * (2 ** max(attempt_number - 1, 0))
+
+
 def scrape_article(url: str) -> dict | None:
     """Call Firecrawl /scrape to extract article content from a URL."""
     if not config.FIRECRAWL_API_KEY:
@@ -209,28 +223,58 @@ def scrape_article(url: str) -> dict | None:
             "prompt": config.FIRECRAWL_EXTRACTION_PROMPT,
         },
     }
-    try:
-        resp = requests.post(
-            f"{config.FIRECRAWL_BASE_URL}/scrape",
-            headers=headers,
-            json=payload,
-            timeout=120,
-        )
-        resp.raise_for_status()
-        data = resp.json().get("data", {}).get("json", {})
-        article_text = (data.get("article_text") or "").strip()
-        if not article_text:
+    for attempt_number in range(1, config.SCRAPE_MAX_RETRIES + 2):
+        try:
+            resp = requests.post(
+                f"{config.FIRECRAWL_BASE_URL}/scrape",
+                headers=headers,
+                json=payload,
+                timeout=120,
+            )
+            resp.raise_for_status()
+            data = resp.json().get("data", {}).get("json", {})
+            article_text = (data.get("article_text") or "").strip()
+            if not article_text:
+                return None
+            return {
+                "title": (data.get("title") or "n/a").strip(),
+                "article_text": article_text[: config.MAX_ARTICLE_CHARS],
+                "published_date": (data.get("published_date") or "n/a").strip(),
+                "author": (data.get("author") or "n/a").strip(),
+            }
+        except requests.HTTPError as e:
+            response = e.response
+            status_code = response.status_code if response is not None else "unknown"
+            should_retry = (
+                response is not None
+                and status_code in config.SCRAPE_RETRYABLE_STATUS_CODES
+                and attempt_number <= config.SCRAPE_MAX_RETRIES
+            )
+            if should_retry:
+                delay = retry_delay_seconds(response, attempt_number)
+                sys.stderr.write(
+                    f"[WARN] {url} -> HTTP {status_code}; retrying in {delay:.1f}s "
+                    f"({attempt_number}/{config.SCRAPE_MAX_RETRIES})\n"
+                )
+                time.sleep(delay)
+                continue
+            sys.stderr.write(f"[WARN] {url} -> HTTP {status_code}\n")
             return None
-        return {
-            "title": (data.get("title") or "n/a").strip(),
-            "article_text": article_text[: config.MAX_ARTICLE_CHARS],
-            "published_date": (data.get("published_date") or "n/a").strip(),
-            "author": (data.get("author") or "n/a").strip(),
-        }
-    except requests.HTTPError as e:
-        sys.stderr.write(f"[WARN] {url} -> HTTP {e.response.status_code}\n")
-    except Exception as e:
-        sys.stderr.write(f"[WARN] {url} -> {e}\n")
+        except requests.RequestException as e:
+            should_retry = attempt_number <= config.SCRAPE_MAX_RETRIES
+            if should_retry:
+                delay = retry_delay_seconds(None, attempt_number)
+                sys.stderr.write(
+                    f"[WARN] {url} -> {e}; retrying in {delay:.1f}s "
+                    f"({attempt_number}/{config.SCRAPE_MAX_RETRIES})\n"
+                )
+                time.sleep(delay)
+                continue
+            sys.stderr.write(f"[WARN] {url} -> {e}\n")
+            return None
+        except Exception as e:
+            sys.stderr.write(f"[WARN] {url} -> {e}\n")
+            return None
     return None
 
 
@@ -292,6 +336,7 @@ def load_visited_urls(csv_path: str) -> set[str]:
 
 def main() -> None:
     out_path = config.ARTICLES_RAW_CSV
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     visited = load_visited_urls(out_path)
     sys.stderr.write(f"[INFO] {len(visited)} URLs already scraped (resuming).\n")
 

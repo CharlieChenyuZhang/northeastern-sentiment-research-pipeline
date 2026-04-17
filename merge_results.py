@@ -12,12 +12,14 @@ Usage:
 from __future__ import annotations
 
 import csv
+import os
 import sys
 
 import config
 
 
 def main() -> None:
+    os.makedirs(os.path.dirname(config.FINAL_RESULTS_CSV) or ".", exist_ok=True)
     # Load simple results keyed by URL
     simple: dict[str, dict] = {}
     try:

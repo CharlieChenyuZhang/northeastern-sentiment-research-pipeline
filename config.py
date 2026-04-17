@@ -24,9 +24,10 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 # Target Companies
 # ---------------------------------------------------------------------------
 # Research focus: one company and one fixed calendar year.
-TARGET_YEAR = 2025
+TARGET_YEAR = int(os.getenv("TARGET_YEAR", "2025"))
 TARGET_START_DATE = date(TARGET_YEAR, 1, 1)
 TARGET_END_DATE = date(TARGET_YEAR, 12, 31)
+PIPELINE_OUTPUT_DIR = os.getenv("PIPELINE_OUTPUT_DIR", "").strip()
 
 COMPANIES = [
     "JPMorgan Chase",
@@ -64,7 +65,10 @@ MAX_RESULTS_PER_SOURCE = 100
 MAX_SEARCH_RESULTS = 250  # per query after combining all sources
 FIRECRAWL_BASE_URL = "https://api.firecrawl.dev/v1"
 FIRECRAWL_SEARCH_SOURCES = ["web", "news"]
-SCRAPE_WORKERS = 8
+SCRAPE_WORKERS = 2
+SCRAPE_MAX_RETRIES = 4
+SCRAPE_RETRY_BACKOFF_SECONDS = 2.0
+SCRAPE_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 # Firecrawl extraction prompt — tells the LLM what to pull from each page
 FIRECRAWL_EXTRACTION_PROMPT = (
@@ -144,10 +148,15 @@ COMPREHENSIVE_RUNS = 3
 # ---------------------------------------------------------------------------
 # CSV File Paths
 # ---------------------------------------------------------------------------
-ARTICLES_RAW_CSV = "articles_raw.csv"
-SENTIMENT_SIMPLE_CSV = "sentiment_simple.csv"
-SENTIMENT_COMPREHENSIVE_CSV = "sentiment_comprehensive.csv"
-FINAL_RESULTS_CSV = "final_results.csv"
+def output_path(filename: str) -> str:
+    return os.path.join(PIPELINE_OUTPUT_DIR, filename) if PIPELINE_OUTPUT_DIR else filename
+
+
+ARTICLES_RAW_CSV = output_path("articles_raw.csv")
+SENTIMENT_SIMPLE_CSV = output_path("sentiment_simple.csv")
+SENTIMENT_COMPREHENSIVE_CSV = output_path("sentiment_comprehensive.csv")
+FINAL_RESULTS_CSV = output_path("final_results.csv")
+ANALYSIS_OUTPUT_DIR = output_path("analysis_output")
 
 # Column names for articles_raw.csv
 RAW_COLUMNS = [

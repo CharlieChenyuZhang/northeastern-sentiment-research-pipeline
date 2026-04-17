@@ -103,6 +103,7 @@ def main() -> None:
 
     in_path = config.ARTICLES_RAW_CSV
     out_path = config.SENTIMENT_SIMPLE_CSV
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
     if not os.path.exists(in_path):
         sys.exit(f"[ERROR] {in_path} not found. Run search_and_scrape.py first.")
