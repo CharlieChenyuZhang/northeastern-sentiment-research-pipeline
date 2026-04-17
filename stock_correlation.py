@@ -21,6 +21,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta
 
@@ -60,6 +61,40 @@ SENTIMENT_SCORES = {
 
 OUTPUT_DIR = config.ANALYSIS_OUTPUT_DIR
 SMOOTHING_WINDOWS = [7, 14, 30]
+LOCAL_MARKET_NUMERIC_COLS = [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "adjusted",
+    "adjusted_close",
+    "r",
+    "volatility",
+    "intra_day_chg",
+    "downside_risk",
+    "var1pct",
+    "lnvol_chg",
+    "amihud_ratio",
+    "amihud_zscore",
+    "illiq",
+    "hl_spread",
+    "zero_return_flag",
+    "typical_price",
+    "vwap_proxy",
+    "vwap_cum",
+    "rolls_measure",
+    "dollar_volume",
+    "kyle_lambda_proxy",
+    "amihud_impact_proxy",
+    "turnover_ratio",
+    "shares_outstanding",
+    "rolls_measure_rolling",
+    "rolls_measure_strict",
+    "rolls_measure_window",
+    "rolls_measure_min_periods",
+    "volume_zero_flag",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +106,11 @@ def parse_date(raw: str) -> datetime | None:
     raw = raw.strip()
     if not raw or raw.lower() == "n/a":
         return None
+    raw = raw.replace("a.m.", "AM").replace("p.m.", "PM")
+    raw = raw.replace("a.m", "AM").replace("p.m", "PM")
+    raw = re.sub(r"\bat\b", " ", raw, flags=re.IGNORECASE)
+    raw = re.sub(r",?\s+(ET|EST|EDT|IST|UTC|GMT)$", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\s+", " ", raw).strip(" ,")
     for fmt in (
         "%Y-%m-%d",
         "%Y-%m-%dT%H:%M:%S",
@@ -187,6 +227,64 @@ def fetch_stock_prices(
     df.index = pd.to_datetime(df.index).date  # type: ignore[assignment]
     df.index.name = "date"
     return df
+
+
+def load_market_data(
+    csv_path: str,
+    symbol: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+) -> pd.DataFrame:
+    """Load one-row-per-date market and liquidity data from a local CSV."""
+    df = pd.read_csv(csv_path)
+    if df.empty:
+        return df
+
+    if symbol and "symbol" in df.columns:
+        filtered = df[df["symbol"].astype(str).str.upper() == symbol.upper()].copy()
+        if not filtered.empty:
+            df = filtered
+
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df[df["date"].notna()].copy()
+    if df.empty:
+        return df
+
+    if start is not None:
+        df = df[df["date"] >= pd.Timestamp(start)]
+    if end is not None:
+        df = df[df["date"] <= pd.Timestamp(end)]
+    if df.empty:
+        return df
+
+    for col in LOCAL_MARKET_NUMERIC_COLS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    metric_cols = [col for col in LOCAL_MARKET_NUMERIC_COLS if col in df.columns]
+    market = (
+        df[["date", *metric_cols]]
+        .sort_values("date")
+        .groupby("date", as_index=True)
+        .first()
+        .sort_index()
+    )
+
+    if "adjusted_close" not in market.columns:
+        if "adjusted" in market.columns:
+            market["adjusted_close"] = market["adjusted"]
+        elif "close" in market.columns:
+            market["adjusted_close"] = market["close"]
+
+    if "daily_return" not in market.columns and "adjusted_close" in market.columns:
+        market["daily_return"] = market["adjusted_close"].pct_change()
+
+    if "close" not in market.columns and "adjusted_close" in market.columns:
+        market["close"] = market["adjusted_close"]
+
+    market.index = market.index.date  # type: ignore[assignment]
+    market.index.name = "date"
+    return market
 
 
 # ---------------------------------------------------------------------------
@@ -541,6 +639,16 @@ def main() -> None:
                         help="Fetch stock data this many days before earliest article")
     parser.add_argument("--days-after", type=int, default=30,
                         help="Fetch stock data this many days after latest article")
+    parser.add_argument(
+        "--financial-metrics-csv",
+        default="",
+        help="Optional local CSV with close/liquidity metrics to use instead of yfinance.",
+    )
+    parser.add_argument(
+        "--financial-symbol",
+        default="",
+        help="Optional ticker/symbol filter for the local financial metrics CSV.",
+    )
     args = parser.parse_args()
 
     # Fall back to whichever file exists
@@ -583,8 +691,21 @@ def main() -> None:
         min_date = pd.Timestamp(min(daily_sent.index)) - timedelta(days=args.days_before)
         max_date = pd.Timestamp(max(daily_sent.index)) + timedelta(days=args.days_after)
 
-        sys.stderr.write(f"[INFO] Fetching {ticker} stock data {min_date.date()} to {max_date.date()}\n")
-        stock = fetch_stock_prices(ticker, str(min_date.date()), str(max_date.date()))
+        if args.financial_metrics_csv:
+            chosen_symbol = args.financial_symbol or ticker
+            sys.stderr.write(
+                f"[INFO] Loading local market/liquidity data from {args.financial_metrics_csv} "
+                f"for {chosen_symbol} ({min_date.date()} to {max_date.date()})\n"
+            )
+            stock = load_market_data(
+                args.financial_metrics_csv,
+                symbol=chosen_symbol,
+                start=str(min_date.date()),
+                end=str(max_date.date()),
+            )
+        else:
+            sys.stderr.write(f"[INFO] Fetching {ticker} stock data {min_date.date()} to {max_date.date()}\n")
+            stock = fetch_stock_prices(ticker, str(min_date.date()), str(max_date.date()))
         if stock.empty:
             sys.stderr.write(f"[WARN] No stock data for {ticker}.\n")
             continue
