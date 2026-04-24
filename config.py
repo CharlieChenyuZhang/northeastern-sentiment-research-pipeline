@@ -17,6 +17,7 @@ load_dotenv()
 # API Keys
 # ---------------------------------------------------------------------------
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY", "")
+MASSIVE_API_KEY = os.getenv("MASSIVE_API_KEY", "")
 FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
@@ -24,7 +25,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 # Target Companies
 # ---------------------------------------------------------------------------
 # Research focus: one company and one fixed calendar year.
-TARGET_YEAR = int(os.getenv("TARGET_YEAR", "2025"))
+TARGET_YEAR = int(os.getenv("TARGET_YEAR", "2024"))
 TARGET_START_DATE = date(TARGET_YEAR, 1, 1)
 TARGET_END_DATE = date(TARGET_YEAR, 12, 31)
 PIPELINE_OUTPUT_DIR = os.getenv("PIPELINE_OUTPUT_DIR", "").strip()
@@ -115,6 +116,23 @@ PROMPT_ANALYSIS = (
     "Reply with ONLY the JSON object, no other text."
 )
 
+# Massive simple sentiment analysis — classify title and description separately.
+PROMPT_MASSIVE_SENTIMENT_SIMPLE = (
+    "Analyze the following financial news metadata and return a JSON object with "
+    "exactly these two keys:\n"
+    "\n"
+    "1. \"sentiment_title\": The sentiment of the title only. Must be one of: "
+    "\"Positive\", \"Negative\", \"Neutral\", or \"Mixed\". If the title is "
+    "missing or empty, return an empty string.\n"
+    "\n"
+    "2. \"sentiment_description\": The sentiment of the description only. Must "
+    "be one of: \"Positive\", \"Negative\", \"Neutral\", or \"Mixed\". If the "
+    "description is missing or empty, return an empty string.\n"
+    "\n"
+    "Use only the provided title and description. Reply with ONLY the JSON "
+    "object, no other text."
+)
+
 # Comprehensive analysis — single-call prompt that returns sentiment labels
 # with confidence and emotion labels with confidence, all in one JSON.
 COMP_PROMPT_ANALYSIS = (
@@ -153,7 +171,9 @@ def output_path(filename: str) -> str:
 
 
 ARTICLES_RAW_CSV = output_path("articles_raw.csv")
+ARTICLES_RAW_MASSIVE_CSV = output_path("articles_raw_massive.csv")
 SENTIMENT_SIMPLE_CSV = output_path("sentiment_simple.csv")
+SENTIMENT_MASSIVE_SIMPLE_CSV = output_path("sentiment_massive_simple.csv")
 SENTIMENT_COMPREHENSIVE_CSV = output_path("sentiment_comprehensive.csv")
 FINAL_RESULTS_CSV = output_path("final_results.csv")
 ANALYSIS_OUTPUT_DIR = output_path("analysis_output")

@@ -1,0 +1,5 @@
+company,ticker,metric,pearson_r,pearson_p,spearman_r,spearman_p,n_days
+JPMorgan Chase,JPM,article_sentiment,0.1547,0.044,0.1344,0.0805,170
+JPMorgan Chase,JPM,reader_sentiment,0.1511,0.0491,0.1561,0.0421,170
+JPMorgan Chase,JPM,article_emotion_intensity,0.0189,0.8063,0.0172,0.8234,170
+JPMorgan Chase,JPM,reader_emotion_intensity,0.0475,0.5386,0.0651,0.3989,170

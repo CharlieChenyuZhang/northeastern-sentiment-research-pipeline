@@ -1,0 +1,13 @@
+company,year,month,query,google_news_count,google_search_count,firecrawl_count,total_raw_count,total_unique_count,overlap_count
+JPMorgan Chase,2025,January,JPMorgan Chase JPM news what happened in January 2025,72,100,100,272,167,105
+JPMorgan Chase,2025,February,JPMorgan Chase JPM news what happened in February 2025,64,100,100,264,154,110
+JPMorgan Chase,2025,March,JPMorgan Chase JPM news what happened in March 2025,73,96,100,269,183,86
+JPMorgan Chase,2025,April,JPMorgan Chase JPM news what happened in April 2025,73,93,100,266,185,81
+JPMorgan Chase,2025,May,JPMorgan Chase JPM news what happened in May 2025,67,100,96,263,175,88
+JPMorgan Chase,2025,June,JPMorgan Chase JPM news what happened in June 2025,72,100,100,272,180,92
+JPMorgan Chase,2025,July,JPMorgan Chase JPM news what happened in July 2025,70,80,92,242,172,70
+JPMorgan Chase,2025,August,JPMorgan Chase JPM news what happened in August 2025,71,100,100,271,172,99
+JPMorgan Chase,2025,September,JPMorgan Chase JPM news what happened in September 2025,68,76,78,222,154,68
+JPMorgan Chase,2025,October,JPMorgan Chase JPM news what happened in October 2025,67,62,82,211,149,62
+JPMorgan Chase,2025,November,JPMorgan Chase JPM news what happened in November 2025,66,100,100,266,160,106
+JPMorgan Chase,2025,December,JPMorgan Chase JPM news what happened in December 2025,69,78,73,220,148,72

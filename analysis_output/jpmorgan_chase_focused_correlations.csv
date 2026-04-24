@@ -1,0 +1,9 @@
+text_metric,stock_metric,n_obs,pearson_r,pearson_p,spearman_r,spearman_p
+Article Sentiment,Stock Close,91,0.0991,0.3502,0.1051,0.3215
+Article Sentiment,Daily Return,91,0.1636,0.1213,0.0965,0.363
+Reader Sentiment,Stock Close,91,0.0856,0.42,0.0922,0.385
+Reader Sentiment,Daily Return,91,0.1467,0.1653,0.099,0.3503
+Article Emotion Intensity,Stock Close,91,0.0701,0.5091,0.0525,0.6214
+Article Emotion Intensity,Daily Return,91,0.0449,0.6726,-0.0046,0.9658
+Reader Emotion Intensity,Stock Close,91,0.0943,0.374,0.0928,0.3815
+Reader Emotion Intensity,Daily Return,91,-0.0471,0.6572,-0.118,0.2652

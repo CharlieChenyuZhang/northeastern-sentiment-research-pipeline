@@ -1,5 +1,4 @@
 .env
-*.csv
 discovered_urls/
 __pycache__/
 *.pyc
